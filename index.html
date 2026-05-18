@@ -746,21 +746,28 @@ function durationToSeconds(iso) {
   return (parseInt(m[1]||0)*3600) + (parseInt(m[2]||0)*60) + parseInt(m[3]||0);
 }
 
+async function apiFetch(url) {
+  // Try direct first, fall back to CORS proxy
+  try {
+    const r = await fetch(url);
+    if (r.ok) return r.json();
+  } catch(e) {}
+  const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+  const r2 = await fetch(proxy);
+  const d = await r2.json();
+  return JSON.parse(d.contents);
+}
+
 async function fetchVideos(query) {
-  // videoDuration=medium filters to 4–20 min; we also double-check below
   const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=20&order=viewCount&videoDuration=medium&key=${API_KEY}`;
-  const searchRes = await fetch(searchUrl);
-  if (!searchRes.ok) throw new Error('YouTube API error: ' + searchRes.status);
-  const searchData = await searchRes.json();
+  const searchData = await apiFetch(searchUrl);
 
   if (!searchData.items || searchData.items.length === 0) return [];
 
   const ids = searchData.items.map(i => i.id.videoId).join(',');
 
-  // Fetch stats + content details
   const detailUrl = `https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails,snippet&id=${ids}&key=${API_KEY}`;
-  const detailRes = await fetch(detailUrl);
-  const detailData = await detailRes.json();
+  const detailData = await apiFetch(detailUrl);
 
   // Merge + filter out Shorts (under 61 seconds) + cap at 12
   const merged = searchData.items.map(item => {
