@@ -465,34 +465,72 @@ async function runGen(prompt){
   prog.className='prog on';prog.innerHTML='<div class="pf"></div>';
   ra.className='ra';ri.style.display='none';rph.style.display='none';dl.style.display='none';
 
-  try{
-    const parts=[{text:prompt}];
-    if(uploadedImgs.length)parts.push({inline_data:{mime_type:uploadedImgs[0].mime,data:uploadedImgs[0].b64}});
+  const parts=[{text:prompt}];
+  if(uploadedImgs.length)parts.push({inline_data:{mime_type:uploadedImgs[0].mime,data:uploadedImgs[0].b64}});
 
+  // Helper: try a single model, returns image data URL or null
+  async function tryModel(modelId,body){
     const res=await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent?key=${GM_KEY}`,
-      {method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({contents:[{parts}],generationConfig:{responseModalities:['Text','Image']}})}
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${GM_KEY}`,
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}
     );
     const data=await res.json();
-    if(data.error)throw new Error(data.error.message||'Gemini API error');
-
+    if(data.error)throw new Error(data.error.message||'API error');
     const imgPart=data.candidates?.[0]?.content?.parts?.find(p=>p.inlineData);
-    if(imgPart){
-      const src=`data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
+    return imgPart?`data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`:null;
+  }
+
+  try{
+    let src=null;
+    let usedModel='';
+
+    // 1st attempt: gemini-2.0-flash-preview-image-generation
+    try{
+      src=await tryModel('gemini-2.0-flash-preview-image-generation',{
+        contents:[{parts}],
+        generationConfig:{responseModalities:['Image','Text']}
+      });
+      usedModel='Gemini 2.0 Flash Preview';
+    }catch(e1){
+      console.warn('Model 1 failed:',e1.message,'. Trying Imagen 3 fallback...');
+      // 2nd attempt: imagen-3.0-generate-002
+      try{
+        src=await tryModel('imagen-3.0-generate-002',{
+          instances:[{prompt}],
+          parameters:{sampleCount:1}
+        });
+        // Imagen uses a different response shape — extract from predictions
+        if(!src){
+          const res2=await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${GM_KEY}`,
+            {method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({instances:[{prompt}],parameters:{sampleCount:1}})}
+          );
+          const d2=await res2.json();
+          if(d2.error)throw new Error(d2.error.message||'Imagen API error');
+          const pred=d2.predictions?.[0];
+          if(pred?.bytesBase64Encoded)src=`data:image/png;base64,${pred.bytesBase64Encoded}`;
+        }
+        usedModel='Imagen 3';
+      }catch(e2){
+        throw new Error(`All models failed. Gemini: ${e1.message} | Imagen: ${e2.message}`);
+      }
+    }
+
+    if(src){
       ri.src=src;ri.style.display='block';rph.style.display='none';
-      dl.href=src;dl.style.display='flex';
+      dl.href=src;dl.download=`thumbnail-${Date.now()}.png`;dl.style.display='flex';
     }else{
       rph.style.display='flex';
       rph.innerHTML=`<i class="ti ti-info-circle" style="font-size:20px;color:var(--coral)"></i>
-        <span>Image generation unavailable on this key tier.</span>
-        <span style="font-size:10px;opacity:.7">Enable Imagen 3 in Google AI Studio.</span>`;
+        <span>No image returned by ${usedModel||'API'}.</span>
+        <span style="font-size:10px;opacity:.7">Your API key may need Imagen enabled in Google AI Studio.</span>`;
     }
     ra.className='ra on';regenBtn.style.display='flex';
   }catch(err){
     rph.style.display='flex';
     rph.innerHTML=`<i class="ti ti-alert-triangle" style="font-size:20px;color:var(--coral)"></i>
-      <span style="color:var(--coral)">Error: ${err.message}</span>`;
+      <span style="color:var(--coral);font-size:12px">${err.message}</span>`;
     ra.className='ra on';
   }
   genBtn.disabled=false;
